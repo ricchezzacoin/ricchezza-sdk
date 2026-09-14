@@ -1,0 +1,5 @@
+{
+  "name": "ricchezza-wallet",
+  "private": true,
+  "workspaces": ["packages/*"]
+}
