@@ -1,13 +1,16 @@
 {
   "name": "@ricchezza/wallet-core",
-  "version": "0.0.1",
+  "version": "0.4.0",
   "description": "Wallet core for the Ricchezza Network. Generate, import, and manage wallets. Encrypts keys locally with Argon2 + AES-256-GCM. Designed for browser extensions and web apps.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/test.ts"
+    "test": "tsx src/test-hd.ts && tsx src/test-v01.ts && tsx src/test-tx.ts",
+    "test:hd": "tsx src/test-hd.ts",
+    "test:v01": "tsx src/test-v01.ts",
+    "test:tx": "tsx src/test-tx.ts"
   },
   "dependencies": {
     "@ricchezza/sdk": "file:/home/puneetsingh/ricchezza-sdk/sdk",
