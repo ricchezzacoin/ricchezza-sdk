@@ -187,3 +187,93 @@ export async function sendPrivateToPublic(
 export function estimateFee(): bigint {
   return 1_000_000n;
 }
+
+/**
+ * Split a private record into two smaller records.
+ * Useful for making exact payments from private balance.
+ * Note: 10,000 microcredits (0.01 RICZ) is deducted as split fee.
+ *
+ * @param record         - Decrypted record plaintext from scanPrivateBalance
+ * @param splitAmountMicro - Amount for first record (remainder goes to second)
+ */
+export async function splitRecord(
+  privateKeyStr: string,
+  record: string,
+  splitAmountMicro: bigint,
+  options: TransactionOptions = {}
+): Promise<TransactionResult> {
+  if (!privateKeyStr.startsWith('RPrivateKey1'))
+    throw new Error('Invalid private key');
+  if (!record) throw new Error('Record plaintext is required');
+  if (splitAmountMicro <= 0n) throw new Error('Split amount must be greater than 0');
+
+  const relayUrl = options.relayUrl ?? DEFAULT_RELAY;
+  const recordCompact = record.replace(/\s+/g, ' ').trim();
+
+  const res = await fetch(`${relayUrl}/record/split`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      privateKey: privateKeyStr,
+      record: recordCompact,
+      splitAmountMicro: splitAmountMicro.toString(),
+    }),
+  });
+
+  const data = await res.json() as any;
+  if (!res.ok || !data.txId)
+    throw new Error(`Split failed: ${data.error ?? JSON.stringify(data)}`);
+
+  return {
+    txId: data.txId,
+    explorerUrl: data.explorerUrl,
+    amountMicrocredits: splitAmountMicro,
+    feeMicrocredits: 1_000_000n,
+    recipient: '',
+    transferType: 'private',
+  };
+}
+
+/**
+ * Join two private records into one.
+ * Useful for consolidating multiple small records into one spendable record.
+ * Both records must be owned by the same address.
+ *
+ * @param record1 - First record plaintext from scanPrivateBalance
+ * @param record2 - Second record plaintext from scanPrivateBalance
+ */
+export async function joinRecords(
+  privateKeyStr: string,
+  record1: string,
+  record2: string,
+  options: TransactionOptions = {}
+): Promise<TransactionResult> {
+  if (!privateKeyStr.startsWith('RPrivateKey1'))
+    throw new Error('Invalid private key');
+  if (!record1 || !record2) throw new Error('Both record plaintexts are required');
+
+  const relayUrl = options.relayUrl ?? DEFAULT_RELAY;
+
+  const res = await fetch(`${relayUrl}/record/join`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      privateKey: privateKeyStr,
+      record1: record1.replace(/\s+/g, ' ').trim(),
+      record2: record2.replace(/\s+/g, ' ').trim(),
+    }),
+  });
+
+  const data = await res.json() as any;
+  if (!res.ok || !data.txId)
+    throw new Error(`Join failed: ${data.error ?? JSON.stringify(data)}`);
+
+  return {
+    txId: data.txId,
+    explorerUrl: data.explorerUrl,
+    amountMicrocredits: 0n,
+    feeMicrocredits: 1_000_000n,
+    recipient: '',
+    transferType: 'private',
+  };
+}

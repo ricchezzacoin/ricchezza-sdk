@@ -41,6 +41,8 @@ export {
   sendPrivate,
   sendPrivateToPublic,
   estimateFee,
+  splitRecord,
+  joinRecords,
 } from './TransactionBuilder.js';
 export type {
   TransactionOptions,
