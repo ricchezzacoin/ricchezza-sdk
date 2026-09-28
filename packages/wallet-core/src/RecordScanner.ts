@@ -24,16 +24,18 @@ export interface ScanResult {
 }
 
 export async function scanPrivateBalance(
-  privateKeyStr: string,
+  keyStr: string,
   fromBlock = 0,
   toBlock?: number,
   rpcUrl = DEFAULT_RPC
 ): Promise<ScanResult> {
-  if (!privateKeyStr.startsWith('RPrivateKey1')) {
-    throw new Error('Invalid private key');
+  // Accept private key (RPrivateKey1...) or view key (RViewKey1...)
+  if (!keyStr.startsWith('RPrivateKey1') && !keyStr.startsWith('RViewKey1')) {
+    throw new Error('Invalid key — must start with RPrivateKey1 or RViewKey1');
   }
-
-  const account = new Account({ privateKey: privateKeyStr });
+  const account = keyStr.startsWith('RPrivateKey1')
+    ? new Account({ privateKey: keyStr })
+    : new Account({ viewKey: keyStr } as any);
   const records: OwnedRecord[] = [];
 
   // Get latest height if not specified
@@ -132,11 +134,11 @@ export async function scanPrivateBalance(
 }
 
 export async function getPrivateBalance(
-  privateKeyStr: string,
+  keyStr: string,
   fromBlock = 0,
   toBlock?: number,
   rpcUrl = DEFAULT_RPC
 ): Promise<bigint> {
-  const result = await scanPrivateBalance(privateKeyStr, fromBlock, toBlock, rpcUrl);
+  const result = await scanPrivateBalance(keyStr, fromBlock, toBlock, rpcUrl);
   return result.totalMicrocredits;
 }

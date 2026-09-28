@@ -58,7 +58,7 @@ function mapFunction(fn: string): TxType {
  */
 export async function getTransactionHistory(
   address: string,
-  privateKeyStr?: string,
+  privateKeyOrViewKey?: string,
   fromBlock?: number,
   explorerApi = DEFAULT_EXPLORER_API
 ): Promise<TransactionHistory> {
@@ -94,14 +94,14 @@ export async function getTransactionHistory(
   // ── 2. Scan private record history ─────────────────────────────────────────
   let totalPrivateMicrocredits = 0n;
 
-  if (privateKeyStr?.startsWith('RPrivateKey1')) {
+  if (privateKeyOrViewKey?.startsWith('RPrivateKey1') || privateKeyOrViewKey?.startsWith('RViewKey1')) {
     try {
       // Default: scan last 1000 blocks
       const scanFrom = fromBlock ?? 0;
       // Always scan exactly 5000 blocks from fromBlock
       const scanTo = scanFrom + 5000;
 
-      const scan = await scanPrivateBalance(privateKeyStr, scanFrom, scanTo);
+      const scan = await scanPrivateBalance(privateKeyOrViewKey!, scanFrom, scanTo);
       totalPrivateMicrocredits = scan.totalMicrocredits;
 
       for (const record of scan.records) {
