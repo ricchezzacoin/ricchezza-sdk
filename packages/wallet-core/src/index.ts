@@ -61,3 +61,14 @@ export type {
 
 // Constants
 export { COIN_TYPE } from './derivation.js';
+
+// Transaction history (v0.4.2)
+export {
+  getTransactionHistory,
+} from './TransactionHistory.js';
+export type {
+  HistoryEntry,
+  TransactionHistory,
+  TxType,
+  TxRole,
+} from './TransactionHistory.js';
