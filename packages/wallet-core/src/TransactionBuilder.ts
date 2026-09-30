@@ -74,7 +74,7 @@ export async function sendPublic(
     txId: data.txId,
     explorerUrl: data.explorerUrl,
     amountMicrocredits: amountMicro,
-    feeMicrocredits: 1_000_000n,
+    feeMicrocredits: 10_000n,
     recipient,
     transferType: 'public',
   };
@@ -104,7 +104,7 @@ export async function sendPublicToPrivate(
     txId: data.txId,
     explorerUrl: data.explorerUrl,
     amountMicrocredits: amountMicro,
-    feeMicrocredits: 1_000_000n,
+    feeMicrocredits: 10_000n,
     recipient,
     transferType: 'public_to_private',
   };
@@ -141,7 +141,7 @@ export async function sendPrivate(
     txId: data.txId,
     explorerUrl: data.explorerUrl,
     amountMicrocredits: amountMicro,
-    feeMicrocredits: 1_000_000n,
+    feeMicrocredits: 10_000n,
     recipient,
     transferType: 'private',
   };
@@ -177,7 +177,7 @@ export async function sendPrivateToPublic(
     txId: data.txId,
     explorerUrl: data.explorerUrl,
     amountMicrocredits: amountMicro,
-    feeMicrocredits: 1_000_000n,
+    feeMicrocredits: 10_000n,
     recipient,
     transferType: 'private_to_public',
   };
@@ -185,7 +185,7 @@ export async function sendPrivateToPublic(
 
 /** Estimated fee in microcredits (1 RICZ priority fee). */
 export function estimateFee(): bigint {
-  return 1_000_000n;
+  return 10_000n; // 0.01 RICZ priority fee
 }
 
 /**
@@ -228,7 +228,7 @@ export async function splitRecord(
     txId: data.txId,
     explorerUrl: data.explorerUrl,
     amountMicrocredits: splitAmountMicro,
-    feeMicrocredits: 1_000_000n,
+    feeMicrocredits: 10_000n,
     recipient: '',
     transferType: 'private',
   };
@@ -272,7 +272,7 @@ export async function joinRecords(
     txId: data.txId,
     explorerUrl: data.explorerUrl,
     amountMicrocredits: 0n,
-    feeMicrocredits: 1_000_000n,
+    feeMicrocredits: 10_000n,
     recipient: '',
     transferType: 'private',
   };
