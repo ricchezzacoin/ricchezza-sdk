@@ -160,17 +160,16 @@ export async function sendPublicToPrivate(
   const pm = new ProgramManager(rpcUrl, keyProvider, undefined);
   pm.setAccount(account);
 
-  // Build transaction locally then submit
-  const tx = await pm.buildTransferPublicTransaction(
-    recipient,
+  const tx = await pm.buildTransferTransaction(
     Number(amountMicro),
-    PRIORITY_FEE / 1_000_000,
+    recipient,
     'transfer_public_to_private',
+    PRIORITY_FEE,
+    false,
   );
 
-  // Broadcast directly to chain
-  const networkClient = new AleoNetworkClient(rpcUrl);
-  const txId = await networkClient.submitTransaction(tx);
+  const txId = tx.id();
+  await pm.networkClient.submitTransaction(tx.toString());
 
   return makeResult(txId, amountMicro, recipient, 'public_to_private', true);
 }
@@ -182,7 +181,9 @@ export async function sendPublicToPrivate(
 
 /**
  * Send a private transfer (transfer_private).
- * ⚠️ Uses relay — private key sent over HTTPS (transitional).
+ * ✅ PRODUCTION SECURE — signed locally, private key never sent anywhere.
+ *
+ * @param record - Decrypted record plaintext from scanPrivateBalance
  */
 export async function sendPrivate(
   privateKeyStr: string,
@@ -194,20 +195,37 @@ export async function sendPrivate(
   validateInputs(privateKeyStr, recipient, amountMicro);
   if (!record) throw new Error('Record plaintext is required');
 
-  const relayUrl = options.relayUrl ?? DEFAULT_RELAY;
-  const txId = await relayPost('transfer/private', {
-    privateKey:  privateKeyStr,
-    recipient,
-    amountMicro: amountMicro.toString(),
-    record:      record.replace(/\s+/g, ' ').trim(),
-  }, relayUrl);
+  const rpcUrl = options.rpcUrl ?? DEFAULT_RPC;
+  await ensureThreadPool();
 
-  return makeResult(txId, amountMicro, recipient, 'private', false);
+  const account     = new Account({ privateKey: privateKeyStr });
+  const keyProvider = new AleoKeyProvider();
+  keyProvider.useCache(true);
+  const pm = new ProgramManager(rpcUrl, keyProvider, undefined);
+  pm.setAccount(account);
+
+  // Pass record as amountRecord (7th param)
+  const tx = await pm.buildTransferTransaction(
+    Number(amountMicro),
+    recipient,
+    'transfer_private',
+    PRIORITY_FEE,
+    false,
+    undefined,
+    record.replace(/\s+/g, ' ').trim(),
+  );
+
+  const txId = tx.id();
+  await pm.networkClient.submitTransaction(tx.toString());
+
+  return makeResult(txId, amountMicro, recipient, 'private', true);
 }
 
 /**
  * Send private-to-public (transfer_private_to_public).
- * ⚠️ Uses relay — private key sent over HTTPS (transitional).
+ * ✅ PRODUCTION SECURE — signed locally, private key never sent anywhere.
+ *
+ * @param record - Decrypted record plaintext from scanPrivateBalance
  */
 export async function sendPrivateToPublic(
   privateKeyStr: string,
@@ -219,15 +237,29 @@ export async function sendPrivateToPublic(
   validateInputs(privateKeyStr, recipient, amountMicro);
   if (!record) throw new Error('Record plaintext is required');
 
-  const relayUrl = options.relayUrl ?? DEFAULT_RELAY;
-  const txId = await relayPost('transfer/private-to-public', {
-    privateKey:  privateKeyStr,
-    recipient,
-    amountMicro: amountMicro.toString(),
-    record:      record.replace(/\s+/g, ' ').trim(),
-  }, relayUrl);
+  const rpcUrl = options.rpcUrl ?? DEFAULT_RPC;
+  await ensureThreadPool();
 
-  return makeResult(txId, amountMicro, recipient, 'private_to_public', false);
+  const account     = new Account({ privateKey: privateKeyStr });
+  const keyProvider = new AleoKeyProvider();
+  keyProvider.useCache(true);
+  const pm = new ProgramManager(rpcUrl, keyProvider, undefined);
+  pm.setAccount(account);
+
+  const tx = await pm.buildTransferTransaction(
+    Number(amountMicro),
+    recipient,
+    'transfer_private_to_public',
+    PRIORITY_FEE,
+    false,
+    undefined,
+    record.replace(/\s+/g, ' ').trim(),
+  );
+
+  const txId = tx.id();
+  await pm.networkClient.submitTransaction(tx.toString());
+
+  return makeResult(txId, amountMicro, recipient, 'private_to_public', true);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
