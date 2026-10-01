@@ -1,279 +1,288 @@
 /**
- * TransactionBuilder v0.4.0
- * Sends all 4 transfer types via Relay API on client-rpc.
+ * TransactionBuilder v0.5.0 — Production Secure
  *
- * transfer_public           — public balance → public balance
- * transfer_public_to_private — public balance → private record
- * transfer_private          — private record → private record
- * transfer_private_to_public — private record → public balance
+ * Public transfers: signed LOCALLY in browser using WASM
+ *   → Private key NEVER leaves the device
+ *   → ZK proof generated in browser
+ *   → Signed TX broadcast directly to chain
+ *
+ * Private transfers: still use relay (record format complexity)
+ *   → TODO v0.6.0: move to full client-side signing
+ *
+ * Security model:
+ *   sendPublic, sendPublicToPrivate → NO relay, fully client-side ✅
+ *   sendPrivate, sendPrivateToPublic → relay (transitional) ⚠️
+ *   splitRecord, joinRecords → relay (transitional) ⚠️
  */
 
-const DEFAULT_RELAY = 'https://rpc.testnet.ricchezzacoin.com/relay';
+import {
+  ProgramManager,
+  AleoKeyProvider,
+  AleoNetworkClient,
+  Account,
+  initThreadPool,
+} from '@ricchezza/sdk';
+
+const DEFAULT_RPC     = 'https://rpc.testnet.riczscan.com';
+const DEFAULT_RELAY   = 'https://rpc.testnet.ricchezzacoin.com/relay';
+const EXPLORER_BASE   = 'https://explorer.testnet.riczscan.com';
+const PRIORITY_FEE    = 10_000; // 0.01 RICZ
 
 export interface TransactionOptions {
-  feeRicz?: number;
+  rpcUrl?:   string;
   relayUrl?: string;
 }
 
 export interface TransactionResult {
-  txId: string;
-  explorerUrl: string;
+  txId:               string;
+  explorerUrl:        string;
   amountMicrocredits: bigint;
-  feeMicrocredits: bigint;
-  recipient: string;
-  transferType: 'public' | 'public_to_private' | 'private' | 'private_to_public';
+  feeMicrocredits:    bigint;
+  recipient:          string;
+  transferType:       'public' | 'public_to_private' | 'private' | 'private_to_public';
+  signedLocally:      boolean; // true = production secure, false = relay used
 }
 
-async function relayPost(
-  endpoint: string,
-  payload: Record<string, string>,
-  relayUrl: string
-): Promise<TransactionResult> {
-  const res = await fetch(`${relayUrl}/${endpoint}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  const data = await res.json() as any;
-  if (!res.ok || !data.txId)
-    throw new Error(`Transaction failed: ${data.error ?? JSON.stringify(data)}`);
-
-  return data;
+// ── Thread pool (initialize once) ──────────────────────────────────────────
+let _threadPoolReady = false;
+async function ensureThreadPool(): Promise<void> {
+  if (!_threadPoolReady) {
+    await initThreadPool();
+    _threadPoolReady = true;
+  }
 }
 
-function validatePublicInputs(privateKeyStr: string, recipient: string, amountMicro: bigint) {
-  if (!privateKeyStr.startsWith('RPrivateKey1'))
+// ── Helpers ─────────────────────────────────────────────────────────────────
+function validateInputs(pk: string, recipient: string, amount: bigint) {
+  if (!pk.startsWith('RPrivateKey1'))
     throw new Error('Invalid private key — must start with RPrivateKey1');
   if (!recipient.startsWith('ricz1'))
-    throw new Error('Invalid recipient address — must start with ricz1');
-  if (amountMicro <= 0n)
+    throw new Error('Invalid recipient — must start with ricz1');
+  if (amount <= 0n)
     throw new Error('Amount must be greater than 0');
 }
 
+function makeResult(
+  txId: string,
+  amount: bigint,
+  recipient: string,
+  type: TransactionResult['transferType'],
+  signedLocally: boolean,
+): TransactionResult {
+  return {
+    txId,
+    explorerUrl:        `${EXPLORER_BASE}/transactions/${txId}`,
+    amountMicrocredits: amount,
+    feeMicrocredits:    BigInt(PRIORITY_FEE),
+    recipient,
+    transferType:       type,
+    signedLocally,
+  };
+}
+
+// ── Relay fallback (for private transfers) ──────────────────────────────────
+async function relayPost(
+  endpoint: string,
+  payload: Record<string, string>,
+  relayUrl: string,
+): Promise<string> {
+  const res = await fetch(`${relayUrl}/${endpoint}`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(payload),
+  });
+  const data = await res.json() as any;
+  if (!res.ok || !data.txId)
+    throw new Error(`Transaction failed: ${data.error ?? JSON.stringify(data)}`);
+  return data.txId;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PUBLIC TRANSFERS — Fully client-side, production secure
+// Private key never leaves the browser.
+// ══════════════════════════════════════════════════════════════════════════════
+
 /**
  * Send a public transfer (transfer_public).
- * Public balance → Public balance. Both visible on-chain.
+ * ✅ PRODUCTION SECURE — signed locally, private key never sent anywhere.
  */
 export async function sendPublic(
   privateKeyStr: string,
-  recipient: string,
-  amountMicro: bigint,
-  options: TransactionOptions = {}
+  recipient:     string,
+  amountMicro:   bigint,
+  options:       TransactionOptions = {},
 ): Promise<TransactionResult> {
-  validatePublicInputs(privateKeyStr, recipient, amountMicro);
-  const relayUrl = options.relayUrl ?? DEFAULT_RELAY;
+  validateInputs(privateKeyStr, recipient, amountMicro);
 
-  const data = await relayPost('transfer/public', {
-    privateKey: privateKeyStr,
-    recipient,
-    amountMicro: amountMicro.toString(),
-  }, relayUrl);
+  const rpcUrl = options.rpcUrl ?? DEFAULT_RPC;
 
-  return {
-    txId: data.txId,
-    explorerUrl: data.explorerUrl,
-    amountMicrocredits: amountMicro,
-    feeMicrocredits: 10_000n,
+  // Initialize WASM thread pool
+  await ensureThreadPool();
+
+  // Build account + ProgramManager locally
+  const account     = new Account({ privateKey: privateKeyStr });
+  const keyProvider = new AleoKeyProvider();
+  keyProvider.useCache(true);
+  const pm = new ProgramManager(rpcUrl, keyProvider, undefined);
+  pm.setAccount(account);
+
+  // Build + broadcast transaction (ZK proof generated locally)
+  const txId = await pm.transfer(
+    Number(amountMicro),
     recipient,
-    transferType: 'public',
-  };
+    'transfer_public',
+    PRIORITY_FEE,
+    false, // pay fee from public balance
+  );
+
+  return makeResult(txId, amountMicro, recipient, 'public', true);
 }
 
 /**
- * Send a public-to-private transfer (transfer_public_to_private).
- * Public balance → Encrypted private record for recipient.
- * Amount is hidden from public view after transfer.
+ * Send public-to-private (transfer_public_to_private).
+ * ✅ PRODUCTION SECURE — signed locally, private key never sent anywhere.
  */
 export async function sendPublicToPrivate(
   privateKeyStr: string,
-  recipient: string,
-  amountMicro: bigint,
-  options: TransactionOptions = {}
+  recipient:     string,
+  amountMicro:   bigint,
+  options:       TransactionOptions = {},
 ): Promise<TransactionResult> {
-  validatePublicInputs(privateKeyStr, recipient, amountMicro);
-  const relayUrl = options.relayUrl ?? DEFAULT_RELAY;
+  validateInputs(privateKeyStr, recipient, amountMicro);
 
-  const data = await relayPost('transfer/public-to-private', {
-    privateKey: privateKeyStr,
-    recipient,
-    amountMicro: amountMicro.toString(),
-  }, relayUrl);
+  const rpcUrl = options.rpcUrl ?? DEFAULT_RPC;
 
-  return {
-    txId: data.txId,
-    explorerUrl: data.explorerUrl,
-    amountMicrocredits: amountMicro,
-    feeMicrocredits: 10_000n,
+  await ensureThreadPool();
+
+  const account     = new Account({ privateKey: privateKeyStr });
+  const keyProvider = new AleoKeyProvider();
+  keyProvider.useCache(true);
+  const pm = new ProgramManager(rpcUrl, keyProvider, undefined);
+  pm.setAccount(account);
+
+  // Build transaction locally then submit
+  const tx = await pm.buildTransferPublicTransaction(
     recipient,
-    transferType: 'public_to_private',
-  };
+    Number(amountMicro),
+    PRIORITY_FEE / 1_000_000,
+    'transfer_public_to_private',
+  );
+
+  // Broadcast directly to chain
+  const networkClient = new AleoNetworkClient(rpcUrl);
+  const txId = await networkClient.submitTransaction(tx);
+
+  return makeResult(txId, amountMicro, recipient, 'public_to_private', true);
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PRIVATE TRANSFERS — Via relay (transitional, TODO: move to client-side v0.6.0)
+// ⚠️ Private key sent over HTTPS to relay. Relay never stores it.
+// ══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Send a private transfer (transfer_private).
- * Private record → Private record for recipient.
- * Fully private — sender, recipient, amount all hidden.
- *
- * @param record - Decrypted record plaintext from RecordScanner
+ * ⚠️ Uses relay — private key sent over HTTPS (transitional).
  */
 export async function sendPrivate(
   privateKeyStr: string,
-  recipient: string,
-  amountMicro: bigint,
-  record: string,
-  options: TransactionOptions = {}
+  recipient:     string,
+  amountMicro:   bigint,
+  record:        string,
+  options:       TransactionOptions = {},
 ): Promise<TransactionResult> {
-  validatePublicInputs(privateKeyStr, recipient, amountMicro);
-  if (!record) throw new Error('Record plaintext is required for private transfer');
-  const relayUrl = options.relayUrl ?? DEFAULT_RELAY;
+  validateInputs(privateKeyStr, recipient, amountMicro);
+  if (!record) throw new Error('Record plaintext is required');
 
-  // Compact record to single line — newlines break JSON in relay
-  const recordCompact = record.replace(/\s+/g, ' ').trim();
-  const data = await relayPost('transfer/private', {
-    privateKey: privateKeyStr,
+  const relayUrl = options.relayUrl ?? DEFAULT_RELAY;
+  const txId = await relayPost('transfer/private', {
+    privateKey:  privateKeyStr,
     recipient,
     amountMicro: amountMicro.toString(),
-    record: recordCompact,
+    record:      record.replace(/\s+/g, ' ').trim(),
   }, relayUrl);
 
-  return {
-    txId: data.txId,
-    explorerUrl: data.explorerUrl,
-    amountMicrocredits: amountMicro,
-    feeMicrocredits: 10_000n,
-    recipient,
-    transferType: 'private',
-  };
+  return makeResult(txId, amountMicro, recipient, 'private', false);
 }
 
 /**
- * Send a private-to-public transfer (transfer_private_to_public).
- * Private record → Public balance for recipient.
- * Converts private funds to public.
- *
- * @param record - Decrypted record plaintext from RecordScanner
+ * Send private-to-public (transfer_private_to_public).
+ * ⚠️ Uses relay — private key sent over HTTPS (transitional).
  */
 export async function sendPrivateToPublic(
   privateKeyStr: string,
-  recipient: string,
-  amountMicro: bigint,
-  record: string,
-  options: TransactionOptions = {}
+  recipient:     string,
+  amountMicro:   bigint,
+  record:        string,
+  options:       TransactionOptions = {},
 ): Promise<TransactionResult> {
-  validatePublicInputs(privateKeyStr, recipient, amountMicro);
-  if (!record) throw new Error('Record plaintext is required for private-to-public transfer');
-  const relayUrl = options.relayUrl ?? DEFAULT_RELAY;
+  validateInputs(privateKeyStr, recipient, amountMicro);
+  if (!record) throw new Error('Record plaintext is required');
 
-  const recordCompact = record.replace(/\s+/g, ' ').trim();
-  const data = await relayPost('transfer/private-to-public', {
-    privateKey: privateKeyStr,
+  const relayUrl = options.relayUrl ?? DEFAULT_RELAY;
+  const txId = await relayPost('transfer/private-to-public', {
+    privateKey:  privateKeyStr,
     recipient,
     amountMicro: amountMicro.toString(),
-    record: recordCompact,
+    record:      record.replace(/\s+/g, ' ').trim(),
   }, relayUrl);
 
-  return {
-    txId: data.txId,
-    explorerUrl: data.explorerUrl,
-    amountMicrocredits: amountMicro,
-    feeMicrocredits: 10_000n,
-    recipient,
-    transferType: 'private_to_public',
-  };
+  return makeResult(txId, amountMicro, recipient, 'private_to_public', false);
 }
 
-/** Estimated fee in microcredits (1 RICZ priority fee). */
-export function estimateFee(): bigint {
-  return 10_000n; // 0.01 RICZ priority fee
-}
+// ══════════════════════════════════════════════════════════════════════════════
+// RECORD MANAGEMENT — Via relay (transitional)
+// ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Split a private record into two smaller records.
- * Useful for making exact payments from private balance.
- * Note: 10,000 microcredits (0.01 RICZ) is deducted as split fee.
- *
- * @param record         - Decrypted record plaintext from scanPrivateBalance
- * @param splitAmountMicro - Amount for first record (remainder goes to second)
+ * Split a private record into two.
+ * ⚠️ Uses relay (transitional).
  */
 export async function splitRecord(
-  privateKeyStr: string,
-  record: string,
+  privateKeyStr:    string,
+  record:           string,
   splitAmountMicro: bigint,
-  options: TransactionOptions = {}
+  options:          TransactionOptions = {},
 ): Promise<TransactionResult> {
   if (!privateKeyStr.startsWith('RPrivateKey1'))
     throw new Error('Invalid private key');
   if (!record) throw new Error('Record plaintext is required');
-  if (splitAmountMicro <= 0n) throw new Error('Split amount must be greater than 0');
 
   const relayUrl = options.relayUrl ?? DEFAULT_RELAY;
-  const recordCompact = record.replace(/\s+/g, ' ').trim();
+  const txId = await relayPost('record/split', {
+    privateKey:      privateKeyStr,
+    record:          record.replace(/\s+/g, ' ').trim(),
+    splitAmountMicro: splitAmountMicro.toString(),
+  }, relayUrl);
 
-  const res = await fetch(`${relayUrl}/record/split`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      privateKey: privateKeyStr,
-      record: recordCompact,
-      splitAmountMicro: splitAmountMicro.toString(),
-    }),
-  });
-
-  const data = await res.json() as any;
-  if (!res.ok || !data.txId)
-    throw new Error(`Split failed: ${data.error ?? JSON.stringify(data)}`);
-
-  return {
-    txId: data.txId,
-    explorerUrl: data.explorerUrl,
-    amountMicrocredits: splitAmountMicro,
-    feeMicrocredits: 10_000n,
-    recipient: '',
-    transferType: 'private',
-  };
+  return makeResult(txId, splitAmountMicro, '', 'private', false);
 }
 
 /**
  * Join two private records into one.
- * Useful for consolidating multiple small records into one spendable record.
- * Both records must be owned by the same address.
- *
- * @param record1 - First record plaintext from scanPrivateBalance
- * @param record2 - Second record plaintext from scanPrivateBalance
+ * ⚠️ Uses relay (transitional).
  */
 export async function joinRecords(
   privateKeyStr: string,
-  record1: string,
-  record2: string,
-  options: TransactionOptions = {}
+  record1:       string,
+  record2:       string,
+  options:       TransactionOptions = {},
 ): Promise<TransactionResult> {
   if (!privateKeyStr.startsWith('RPrivateKey1'))
     throw new Error('Invalid private key');
   if (!record1 || !record2) throw new Error('Both record plaintexts are required');
 
   const relayUrl = options.relayUrl ?? DEFAULT_RELAY;
+  const txId = await relayPost('record/join', {
+    privateKey: privateKeyStr,
+    record1:    record1.replace(/\s+/g, ' ').trim(),
+    record2:    record2.replace(/\s+/g, ' ').trim(),
+  }, relayUrl);
 
-  const res = await fetch(`${relayUrl}/record/join`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      privateKey: privateKeyStr,
-      record1: record1.replace(/\s+/g, ' ').trim(),
-      record2: record2.replace(/\s+/g, ' ').trim(),
-    }),
-  });
+  return makeResult(txId, 0n, '', 'private', false);
+}
 
-  const data = await res.json() as any;
-  if (!res.ok || !data.txId)
-    throw new Error(`Join failed: ${data.error ?? JSON.stringify(data)}`);
-
-  return {
-    txId: data.txId,
-    explorerUrl: data.explorerUrl,
-    amountMicrocredits: 0n,
-    feeMicrocredits: 10_000n,
-    recipient: '',
-    transferType: 'private',
-  };
+/** Estimated fee in microcredits (0.01 RICZ). */
+export function estimateFee(): bigint {
+  return BigInt(PRIORITY_FEE);
 }

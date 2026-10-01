@@ -1,6 +1,6 @@
 {
   "name": "@ricchezza/wallet-core",
-  "version": "0.4.5",
+  "version": "0.5.0",
   "description": "Wallet core for the Ricchezza Network. Generate, import, and manage wallets. Encrypts keys locally with Argon2 + AES-256-GCM. Designed for browser extensions and web apps.",
   "type": "module",
   "main": "dist/index.js",
