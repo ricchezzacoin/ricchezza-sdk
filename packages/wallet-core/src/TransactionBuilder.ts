@@ -119,21 +119,23 @@ export async function sendPublic(
   // Initialize WASM thread pool
   await ensureThreadPool();
 
-  // Build account + ProgramManager locally
   const account     = new Account({ privateKey: privateKeyStr });
   const keyProvider = new AleoKeyProvider();
   keyProvider.useCache(true);
   const pm = new ProgramManager(rpcUrl, keyProvider, undefined);
   pm.setAccount(account);
 
-  // Build + broadcast transaction (ZK proof generated locally)
-  const txId = await pm.transfer(
+  // Build TX locally then submit — consistent with all other transfer types
+  const tx = await pm.buildTransferTransaction(
     Number(amountMicro),
     recipient,
     'transfer_public',
     PRIORITY_FEE,
-    false, // pay fee from public balance
+    false,
   );
+
+  const txId = tx.id();
+  await pm.networkClient.submitTransaction(tx.toString());
 
   return makeResult(txId, amountMicro, recipient, 'public', true);
 }
