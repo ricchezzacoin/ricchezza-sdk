@@ -23,7 +23,7 @@ import {
   initThreadPool,
 } from '@ricchezza/sdk';
 
-const DEFAULT_RPC     = 'https://rpc.testnet.riczscan.com';
+const DEFAULT_RPC     = 'https://rpc.testnet.ricchezzacoin.com';
 const DEFAULT_RELAY   = 'https://rpc.testnet.ricchezzacoin.com/relay';
 const EXPLORER_BASE   = 'https://explorer.testnet.riczscan.com';
 const PRIORITY_FEE    = 10_000; // 0.01 RICZ
