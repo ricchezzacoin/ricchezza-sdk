@@ -135,7 +135,8 @@ export async function sendPublic(
   );
 
   const txId = tx.id();
-  await pm.networkClient.submitTransaction(tx.toString());
+  const _nc = new AleoNetworkClient(rpcUrl);
+  await _nc.submitTransaction(tx.toString());
 
   return makeResult(txId, amountMicro, recipient, 'public', true);
 }
@@ -171,7 +172,8 @@ export async function sendPublicToPrivate(
   );
 
   const txId = tx.id();
-  await pm.networkClient.submitTransaction(tx.toString());
+  const _nc = new AleoNetworkClient(rpcUrl);
+  await _nc.submitTransaction(tx.toString());
 
   return makeResult(txId, amountMicro, recipient, 'public_to_private', true);
 }
@@ -218,7 +220,8 @@ export async function sendPrivate(
   );
 
   const txId = tx.id();
-  await pm.networkClient.submitTransaction(tx.toString());
+  const _nc = new AleoNetworkClient(rpcUrl);
+  await _nc.submitTransaction(tx.toString());
 
   return makeResult(txId, amountMicro, recipient, 'private', true);
 }
@@ -259,7 +262,8 @@ export async function sendPrivateToPublic(
   );
 
   const txId = tx.id();
-  await pm.networkClient.submitTransaction(tx.toString());
+  const _nc = new AleoNetworkClient(rpcUrl);
+  await _nc.submitTransaction(tx.toString());
 
   return makeResult(txId, amountMicro, recipient, 'private_to_public', true);
 }
