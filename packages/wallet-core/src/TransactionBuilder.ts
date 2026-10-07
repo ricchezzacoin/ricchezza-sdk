@@ -26,7 +26,7 @@ import {
 const DEFAULT_RPC     = 'https://rpc.testnet.ricchezzacoin.com';
 const DEFAULT_RELAY   = 'https://rpc.testnet.ricchezzacoin.com/relay';
 const EXPLORER_BASE   = 'https://explorer.testnet.riczscan.com';
-const PRIORITY_FEE    = 10_000; // 0.01 RICZ
+const PRIORITY_FEE    = 0.01; // 0.01 RICZ in credits
 
 export interface TransactionOptions {
   rpcUrl?:   string;
@@ -73,7 +73,7 @@ function makeResult(
     txId,
     explorerUrl:        `${EXPLORER_BASE}/transactions/${txId}`,
     amountMicrocredits: amount,
-    feeMicrocredits:    BigInt(PRIORITY_FEE),
+    feeMicrocredits:    10_000n,
     recipient,
     transferType:       type,
     signedLocally,
@@ -322,5 +322,5 @@ export async function joinRecords(
 
 /** Estimated fee in microcredits (0.01 RICZ). */
 export function estimateFee(): bigint {
-  return BigInt(PRIORITY_FEE);
+  return 10_000n; // 0.01 RICZ in microcredits
 }
