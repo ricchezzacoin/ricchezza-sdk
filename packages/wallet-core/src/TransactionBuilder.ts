@@ -1,18 +1,16 @@
 /**
- * TransactionBuilder v0.5.0 — Production Secure
+ * TransactionBuilder v0.5.3
  *
- * Public transfers: signed LOCALLY in browser using WASM
- *   → Private key NEVER leaves the device
- *   → ZK proof generated in browser
- *   → Signed TX broadcast directly to chain
+ * All four transfer types are signed LOCALLY with the WASM prover:
+ *   sendPublic, sendPublicToPrivate, sendPrivate, sendPrivateToPublic
+ *   → private key never leaves the device
+ *   → ZK proof is generated in-process
+ *   → signed transaction is broadcast directly to the RPC node
  *
- * Private transfers: still use relay (record format complexity)
- *   → TODO v0.6.0: move to full client-side signing
+ * Still via relay (transitional): splitRecord, joinRecords
  *
- * Security model:
- *   sendPublic, sendPublicToPrivate → NO relay, fully client-side ✅
- *   sendPrivate, sendPrivateToPublic → relay (transitional) ⚠️
- *   splitRecord, joinRecords → relay (transitional) ⚠️
+ * Units: buildTransferTransaction takes the amount in microcredits and the
+ * priority fee in RICZ (credits), NOT microcredits.
  */
 
 import {
@@ -40,16 +38,33 @@ export interface TransactionResult {
   feeMicrocredits:    bigint;
   recipient:          string;
   transferType:       'public' | 'public_to_private' | 'private' | 'private_to_public';
-  signedLocally:      boolean; // true = production secure, false = relay used
+  signedLocally:      boolean; // true = signed on this device, false = relay used
 }
 
-// ── Thread pool (initialize once) ──────────────────────────────────────────
-let _threadPoolReady = false;
-async function ensureThreadPool(): Promise<void> {
-  if (!_threadPoolReady) {
-    await initThreadPool();
-    _threadPoolReady = true;
+// ── Thread pool ─────────────────────────────────────────────────────────────
+// Idempotent, and rejects instead of hanging forever if a pool worker never
+// starts. A failed init can't be retried inside the same WASM instance, so
+// callers (e.g. a Web Worker wrapper) must discard and recreate the worker.
+// The error messages start with "Thread pool init" so wrappers can detect them.
+let _poolPromise: Promise<void> | null = null;
+
+function ensureThreadPool(timeoutMs = 45_000): Promise<void> {
+  if (!_poolPromise) {
+    _poolPromise = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('Thread pool init timed out — a proving worker failed to start')),
+        timeoutMs,
+      );
+      initThreadPool().then(
+        () => { clearTimeout(timer); resolve(); },
+        (e: any) => {
+          clearTimeout(timer);
+          reject(new Error('Thread pool init failed: ' + (e?.message ?? String(e))));
+        },
+      );
+    });
   }
+  return _poolPromise;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -73,14 +88,14 @@ function makeResult(
     txId,
     explorerUrl:        `${EXPLORER_BASE}/transactions/${txId}`,
     amountMicrocredits: amount,
-    feeMicrocredits:    10_000n,
+    feeMicrocredits:    10_000n, // 0.01 RICZ
     recipient,
     transferType:       type,
     signedLocally,
   };
 }
 
-// ── Relay fallback (for private transfers) ──────────────────────────────────
+// ── Relay (split / join only) ───────────────────────────────────────────────
 async function relayPost(
   endpoint: string,
   payload: Record<string, string>,
@@ -98,14 +113,10 @@ async function relayPost(
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// PUBLIC TRANSFERS — Fully client-side, production secure
-// Private key never leaves the browser.
+// TRANSFERS — signed locally, private key never leaves the device
 // ══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Send a public transfer (transfer_public).
- * ✅ PRODUCTION SECURE — signed locally, private key never sent anywhere.
- */
+/** transfer_public */
 export async function sendPublic(
   privateKeyStr: string,
   recipient:     string,
@@ -115,8 +126,6 @@ export async function sendPublic(
   validateInputs(privateKeyStr, recipient, amountMicro);
 
   const rpcUrl = options.rpcUrl ?? DEFAULT_RPC;
-
-  // Initialize WASM thread pool
   await ensureThreadPool();
 
   const account     = new Account({ privateKey: privateKeyStr });
@@ -125,7 +134,6 @@ export async function sendPublic(
   const pm = new ProgramManager(rpcUrl, keyProvider, undefined);
   pm.setAccount(account);
 
-  // Build TX locally then submit — consistent with all other transfer types
   const tx = await pm.buildTransferTransaction(
     Number(amountMicro),
     recipient,
@@ -141,10 +149,7 @@ export async function sendPublic(
   return makeResult(txId, amountMicro, recipient, 'public', true);
 }
 
-/**
- * Send public-to-private (transfer_public_to_private).
- * ✅ PRODUCTION SECURE — signed locally, private key never sent anywhere.
- */
+/** transfer_public_to_private */
 export async function sendPublicToPrivate(
   privateKeyStr: string,
   recipient:     string,
@@ -154,7 +159,6 @@ export async function sendPublicToPrivate(
   validateInputs(privateKeyStr, recipient, amountMicro);
 
   const rpcUrl = options.rpcUrl ?? DEFAULT_RPC;
-
   await ensureThreadPool();
 
   const account     = new Account({ privateKey: privateKeyStr });
@@ -178,16 +182,9 @@ export async function sendPublicToPrivate(
   return makeResult(txId, amountMicro, recipient, 'public_to_private', true);
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// PRIVATE TRANSFERS — Via relay (transitional, TODO: move to client-side v0.6.0)
-// ⚠️ Private key sent over HTTPS to relay. Relay never stores it.
-// ══════════════════════════════════════════════════════════════════════════════
-
 /**
- * Send a private transfer (transfer_private).
- * ✅ PRODUCTION SECURE — signed locally, private key never sent anywhere.
- *
- * @param record - Decrypted record plaintext from scanPrivateBalance
+ * transfer_private
+ * @param record - decrypted record plaintext from scanPrivateBalance
  */
 export async function sendPrivate(
   privateKeyStr: string,
@@ -208,7 +205,7 @@ export async function sendPrivate(
   const pm = new ProgramManager(rpcUrl, keyProvider, undefined);
   pm.setAccount(account);
 
-  // Pass record as amountRecord (7th param)
+  // record is passed as amountRecord (7th parameter)
   const tx = await pm.buildTransferTransaction(
     Number(amountMicro),
     recipient,
@@ -227,10 +224,8 @@ export async function sendPrivate(
 }
 
 /**
- * Send private-to-public (transfer_private_to_public).
- * ✅ PRODUCTION SECURE — signed locally, private key never sent anywhere.
- *
- * @param record - Decrypted record plaintext from scanPrivateBalance
+ * transfer_private_to_public
+ * @param record - decrypted record plaintext from scanPrivateBalance
  */
 export async function sendPrivateToPublic(
   privateKeyStr: string,
@@ -269,13 +264,10 @@ export async function sendPrivateToPublic(
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// RECORD MANAGEMENT — Via relay (transitional)
+// RECORD MANAGEMENT — via relay (transitional)
 // ══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Split a private record into two.
- * ⚠️ Uses relay (transitional).
- */
+/** Split a private record into two. Uses the relay. */
 export async function splitRecord(
   privateKeyStr:    string,
   record:           string,
@@ -288,18 +280,15 @@ export async function splitRecord(
 
   const relayUrl = options.relayUrl ?? DEFAULT_RELAY;
   const txId = await relayPost('record/split', {
-    privateKey:      privateKeyStr,
-    record:          record.replace(/\s+/g, ' ').trim(),
+    privateKey:       privateKeyStr,
+    record:           record.replace(/\s+/g, ' ').trim(),
     splitAmountMicro: splitAmountMicro.toString(),
   }, relayUrl);
 
   return makeResult(txId, splitAmountMicro, '', 'private', false);
 }
 
-/**
- * Join two private records into one.
- * ⚠️ Uses relay (transitional).
- */
+/** Join two private records into one. Uses the relay. */
 export async function joinRecords(
   privateKeyStr: string,
   record1:       string,
@@ -322,5 +311,5 @@ export async function joinRecords(
 
 /** Estimated fee in microcredits (0.01 RICZ). */
 export function estimateFee(): bigint {
-  return 10_000n; // 0.01 RICZ in microcredits
+  return 10_000n;
 }
